@@ -1,0 +1,5 @@
+{
+  "myapp": "~/projects/my-application",
+  "backend": "~/projects/backend-api",
+  "docs": "~/projects/documentation"
+}

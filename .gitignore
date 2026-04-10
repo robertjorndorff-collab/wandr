@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Redis dump
+dump.rdb
+
+# Test
+coverage/
+
+# Session state (local only)
+SESSION-CLOSEOUT-*.md
+
+# Backup files
+*.bak
+
+# Tickets (internal process artifacts)
+TICKETS/done/
+
+# Wandr project config (user-specific)
+config/projects.json

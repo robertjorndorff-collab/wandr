@@ -1,0 +1,17 @@
+{
+  "sitwrap": {
+    "description": "Situation report / summary of current state",
+    "levels": {
+      "1": "One to two sentences. High level. Everything is fine or here is the one thing.",
+      "2": "Short paragraph. Key highlights across all active agents and projects.",
+      "3": "Full summary. Agent status, pending approvals, recent activity, anything requiring attention.",
+      "4": "Deep dive. Everything. Full activity log, all pending items, project health across all three products, any anomalies."
+    }
+  },
+  "stand down": {
+    "description": "End session. Trigger closeout procedure. All agents gracefully shut down."
+  },
+  "agent-naming": {
+    "description": "Convention for agent IDs: {project}-{role}{number}. Examples: myapp-dev1, backend-agent1, docs-writer1. Used in sidecar startup and Slack commands (!myapp-dev1 <prompt>)."
+  }
+}
