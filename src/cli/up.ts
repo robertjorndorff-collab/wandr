@@ -2,8 +2,33 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runPreflight } from './preflight.js';
+
+function resolveProjectDir(agentId: string): string {
+  const prefix = agentId.split('-')[0] || agentId;
+  const home = homedir();
+
+  // Check ~/.wandr/projects.json first, then config/projects.json relative to Wandr root
+  const candidates = [
+    join(home, '.wandr', 'projects.json'),
+    join(dirname(dirname(__dirname)), 'config', 'projects.json'),
+  ];
+
+  for (const configPath of candidates) {
+    if (existsSync(configPath)) {
+      const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+      const dir = cfg[prefix];
+      if (dir) {
+        return dir.replace(/^~/, home);
+      }
+    }
+  }
+
+  // Fallback: current working directory
+  return process.cwd();
+}
 
 const READY_TIMEOUT_MS = 10_000;
 
@@ -56,6 +81,14 @@ export async function runUp(agentId: string, claudeArgs: string[]): Promise<void
     process.exit(1);
   }
 
+  // ── 1b. Assign unique Manager API port per agent ─────────────────
+  // Each sidecar runs a Manager API. Preflight freePort() kills whatever is
+  // on that port. Without unique ports, starting agent B kills agent A's sidecar.
+  const portOffset = [...agentId].reduce((sum, c, i) => sum + c.charCodeAt(0) * (i + 1), 0) % 100;
+  const agentPort = 9400 + portOffset;
+  process.env.MANAGER_API_PORT = String(agentPort);
+  console.log(`[wandr] \u2713 Manager API port: ${agentPort}`);
+
   // ── 2. Start sidecar detached, stdio → sidecar log ────────────────
   const sidecarEntry = process.env.WANDR_DEV
     ? { cmd: 'tsx', args: ['src/index.ts', '--attach', agentId] }
@@ -90,17 +123,34 @@ export async function runUp(agentId: string, claudeArgs: string[]): Promise<void
   }
   if (pre.anthropicKeyInEnv) delete childEnv.ANTHROPIC_API_KEY;
 
+  // Set CLODE_AGENT_ID so Claude Code session knows its identity.
+  // Used by AI Bridge MCP for per-agent guidance files (bridge-guidance-clodeN.json).
+  // If agentId contains 'clode' (e.g., ljs-clode2), extract that part.
+  // Otherwise default to 'clode1' (primary agent for this project).
+  const clodeMatch = agentId.match(/clode\d+/);
+  const clodeAgentId = clodeMatch ? clodeMatch[0] : 'clode1';
+  childEnv.CLODE_AGENT_ID = clodeAgentId;
+  console.log(`[wandr] ✓ CLODE_AGENT_ID=${clodeAgentId}`);
+
   // tmux's command form: `tmux new-session -d -s NAME [args...] -- CMD ARGS`
   // We pass each arg separately so quoting is not an issue.
+  const projectDir = resolveProjectDir(agentId);
+  if (!existsSync(projectDir)) {
+    console.error(`[wandr] ✗ Project directory not found: ${projectDir}`);
+    try { process.kill(sidecar.pid!, 'SIGTERM'); } catch { /* ignore */ }
+    process.exit(1);
+  }
+  console.log(`[wandr] ✓ Project directory: ${projectDir}`);
+
   const newSession = spawnSync(
     'tmux',
     [
       'new-session', '-d',
       '-s', agentId,
       '-x', '220', '-y', '50',
-      CLAUDE_BIN, ...claudeArgs,
+      'env', `CLODE_AGENT_ID=${clodeAgentId}`, CLAUDE_BIN, ...claudeArgs,
     ],
-    { env: childEnv, cwd: process.cwd(), encoding: 'utf-8' },
+    { env: childEnv, cwd: projectDir, encoding: 'utf-8' },
   );
   if (newSession.status !== 0) {
     console.error(`[wandr] \u2717 tmux new-session failed: ${newSession.stderr}`);

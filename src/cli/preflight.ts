@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, access, constants } from 'node:fs/promises';
 
-const MANAGER_PORT = 9400;
+const MANAGER_PORT = Number(process.env.MANAGER_API_PORT) || 9400;
 
 function freePort(port: number): void {
   try {

@@ -42,6 +42,28 @@ export function redactSecrets(line: string): string {
   return out;
 }
 
+// ── MCP failure patterns ──
+// These lines indicate degraded agent state and must NOT be filtered as noise.
+// Each pattern extracts a descriptive label for the alert message.
+const MCP_ALERT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /MCP server.*(?:failed|error)/i, label: 'MCP server failed' },
+  { pattern: /MCP server.*needs? auth/i, label: 'MCP server needs auth' },
+  { pattern: /connector.*unavailable/i, label: 'claude.ai connector unavailable' },
+  { pattern: /connector.*needs? auth/i, label: 'connector needs auth' },
+  { pattern: /MCP server.*timed?\s*out/i, label: 'MCP server timed out' },
+];
+
+/**
+ * Check if a line matches any MCP failure pattern.
+ * Returns the label string if matched, or null.
+ */
+export function detectMcpAlert(line: string): string | null {
+  for (const { pattern, label } of MCP_ALERT_PATTERNS) {
+    if (pattern.test(line)) return label;
+  }
+  return null;
+}
+
 // Box-drawing, block, and common TUI frame chars
 // eslint-disable-next-line no-misleading-character-class
 export const BOX_DRAWING_REGEX = /[\u2500-\u257F\u2580-\u259F\u2800-\u28FF]/g;
@@ -80,7 +102,8 @@ export function isNoiseLine(raw: string): boolean {
   if (/shift\+tab/i.test(stripped)) return true;
   if (/esc ?to ?interrupt/i.test(stripped)) return true;
   if (/checking for updates/i.test(stripped)) return true;
-  if (/connector.*needs? auth/i.test(stripped)) return true;
+  // NOTE: connector auth lines are now handled by detectMcpAlert() —
+  // they are emitted as mcp-alert events, not silently dropped.
   if (/Visual Studio Code disconnected/i.test(stripped)) return true;
   if (/Tip:.*Run Claude/i.test(stripped)) return true;
   if (/Tip:.*\/feedback/i.test(stripped)) return true;
@@ -240,6 +263,12 @@ export class LogTailer extends EventEmitter {
   }
 
   private emitCleanLine(rawLine: string): void {
+    // Check for MCP failure patterns BEFORE noise filtering —
+    // these lines must produce alerts even if they'd otherwise be dropped.
+    const mcpLabel = detectMcpAlert(rawLine);
+    if (mcpLabel) {
+      this.emit('mcp-alert', mcpLabel, rawLine.trim());
+    }
     if (isNoiseLine(rawLine)) return;
     // Strip residual box-drawing chars from kept lines
     const cleaned = rawLine.replace(BOX_DRAWING_REGEX, '').trimEnd();

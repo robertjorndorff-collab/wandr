@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(rm -r /)*",
+      "Bash(sudo *)",
+      "Bash(su *)",
+      "Bash(chmod 777 *)",
+      "Bash(curl * | bash*)",
+      "Bash(wget * | bash*)",
+      "Bash(> /dev/*)",
+      "Bash(dd *)",
+      "Bash(*DROP TABLE*)",
+      "Bash(*DROP DATABASE*)",
+      "Bash(*TRUNCATE *)",
+      "Bash(*DELETE FROM*)",
+      "Bash(*ALTER TABLE * DROP*)",
+      "Bash(*--force-with-lease*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f *)",
+      "Bash(npx supabase db push*)",
+      "Bash(npx supabase migration repair*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Write(**/.env)",
+      "Write(**/.env.*)"
+    ]
+  }
+}

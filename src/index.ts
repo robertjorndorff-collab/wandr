@@ -173,6 +173,30 @@ async function mainAttach(agentId: string): Promise<void> {
     }).then(() => state.incrementMessages());
   });
 
+  // ── MCP failure detection & recovery ──
+  // Track alerts to avoid spamming Slack with repeated failures for the same server.
+  const mcpAlertsSeen = new Set<string>();
+
+  tailer.on('mcp-alert', (label: string, rawLine: string) => {
+    // Deduplicate: only alert once per unique label per session
+    if (mcpAlertsSeen.has(label)) return;
+    mcpAlertsSeen.add(label);
+
+    console.error(`[wandr:attach] MCP failure detected: ${label}`);
+
+    // Post alert to #wandr-ops
+    void transport.postCheckpoint(
+      `⚠️ [${agentId}] MCP FAILURE: ${label}\n> \`${rawLine.slice(0, 200)}\``,
+    );
+
+    // Update agent state to degraded
+    void state.update({ state: 'degraded' });
+
+    // MCP recovery removed — /mcp opens an interactive TUI menu that
+    // crashes the input bridge loop. CEO handles MCP from tmux directly.
+    // Alert-only: operator sees the warning in Slack and decides.
+  });
+
   tailer.on('error', (err: Error) => {
     console.error(`[wandr:attach] Tailer error: ${err.message}`);
   });

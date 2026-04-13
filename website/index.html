@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wandr — Think on Your Feet. Ship from the Trail.</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Source+Code+Pro:wght@400;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--forest:#1a2e1a;--deep:#0d1f0d;--moss:#2d4a2d;--sage:#5a7a5a;--mist:#a8c0a8;--light:#d4e4d4;--cream:#f0f4ed;--spark:#e8a838;--spark-glow:#f4c56830;--ember:#d4862a}
+*{margin:0;padding:0;box-sizing:border-box}html{scroll-behavior:smooth}body{font-family:'DM Sans',sans-serif;background:var(--deep);color:var(--cream);overflow-x:hidden}
+
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:2rem;position:relative;overflow:hidden}
+.hero-bg{position:absolute;inset:0;background:url('./images/wandr-hero-trail.jpg') center/cover;filter:brightness(0.3) saturate(0.8);z-index:0}
+.hero-overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(13,31,13,0.4) 0%,rgba(13,31,13,0.7) 60%,rgba(13,31,13,0.95) 100%),radial-gradient(ellipse 60% 40% at 30% 30%,rgba(232,168,56,0.06),transparent);z-index:1}
+
+.firefly{position:absolute;width:4px;height:4px;background:var(--spark);border-radius:50%;box-shadow:0 0 8px var(--spark),0 0 20px var(--spark-glow);animation:float 8s ease-in-out infinite;opacity:0;z-index:2}
+.firefly:nth-child(1){left:15%;top:30%;animation-delay:0s;animation-duration:7s}.firefly:nth-child(2){left:75%;top:20%;animation-delay:2s;animation-duration:9s}.firefly:nth-child(3){left:45%;top:60%;animation-delay:4s;animation-duration:6s}.firefly:nth-child(4){left:85%;top:70%;animation-delay:1s;animation-duration:8s}.firefly:nth-child(5){left:25%;top:80%;animation-delay:3s;animation-duration:10s}
+@keyframes float{0%,100%{opacity:0;transform:translateY(0) translateX(0)}20%{opacity:.8}50%{opacity:1;transform:translateY(-30px) translateX(15px)}80%{opacity:.6}}
+
+.hero-content{position:relative;z-index:3;max-width:800px;margin:0 auto}
+.hero-badge{display:inline-block;font-family:'Source Code Pro',monospace;font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--spark);border:1px solid rgba(232,168,56,0.4);padding:.35rem .9rem;margin-bottom:1.5rem;opacity:0;animation:fadeUp .8s ease forwards .3s}
+.hero h1{font-family:'Playfair Display',serif;font-size:clamp(3.5rem,9vw,7.5rem);font-weight:700;line-height:.92;margin-bottom:.4rem;opacity:0;animation:fadeUp .8s ease forwards .5s;letter-spacing:-.02em}
+.hero h1 .accent{color:var(--spark);font-style:italic}
+.hero-sub{font-family:'Playfair Display',serif;font-size:clamp(1.1rem,2.5vw,1.5rem);font-weight:400;color:var(--mist);margin-bottom:2rem;font-style:italic;opacity:0;animation:fadeUp .8s ease forwards .7s}
+.hero-desc{font-size:1.05rem;line-height:1.7;color:var(--light);max-width:560px;margin-bottom:2.5rem;opacity:0;animation:fadeUp .8s ease forwards .9s}
+.hero-cta{display:flex;gap:1rem;flex-wrap:wrap;opacity:0;animation:fadeUp .8s ease forwards 1.1s}
+.btn{font-family:'Source Code Pro',monospace;font-size:.8rem;font-weight:600;letter-spacing:.05em;padding:.85rem 1.8rem;border:none;cursor:pointer;text-decoration:none;transition:all .3s ease}
+.btn-primary{background:var(--spark);color:var(--deep);box-shadow:0 0 30px var(--spark-glow)}
+.btn-primary:hover{background:var(--ember);box-shadow:0 0 50px rgba(232,168,56,0.3);transform:translateY(-2px)}
+.btn-ghost{background:transparent;color:var(--mist);border:1px solid rgba(90,122,90,0.5)}
+.btn-ghost:hover{border-color:var(--spark);color:var(--spark)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+
+.origin{padding:6rem 2rem;position:relative;overflow:hidden}
+.origin-bg{position:absolute;inset:0;background:url('./images/wandr-origin-valley.jpg') center/cover;filter:brightness(.15) saturate(.6)}
+.origin-overlay{position:absolute;inset:0;background:linear-gradient(180deg,var(--deep) 0%,rgba(13,31,13,.85) 50%,var(--deep) 100%)}
+.origin-inner{max-width:700px;margin:0 auto;position:relative;z-index:1}
+.origin-quote{font-family:'Playfair Display',serif;font-size:clamp(1.2rem,3vw,1.7rem);font-style:italic;color:var(--mist);line-height:1.6;margin-bottom:2.5rem;padding-left:1.5rem;border-left:2px solid var(--spark)}
+.origin-words{display:flex;gap:3rem;margin-bottom:2.5rem;flex-wrap:wrap}
+.origin-word{flex:1;min-width:200px}
+.origin-word h3{font-family:'Source Code Pro',monospace;font-size:.75rem;letter-spacing:.2em;text-transform:uppercase;color:var(--spark);margin-bottom:.5rem}
+.origin-word p{color:var(--light);line-height:1.6;font-size:.95rem}
+.origin-story{color:var(--mist);line-height:1.7;font-size:.95rem}
+
+.how{padding:6rem 2rem;background:var(--forest)}
+.section-label{font-family:'Source Code Pro',monospace;font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--spark);margin-bottom:.75rem}
+.section-title{font-family:'Playfair Display',serif;font-size:clamp(2rem,4vw,2.8rem);font-weight:700;margin-bottom:2.5rem;color:var(--cream)}
+.how-inner{max-width:900px;margin:0 auto}
+
+.terminal{background:#080808;border-radius:8px;overflow:hidden;box-shadow:0 25px 70px rgba(0,0,0,.6);margin-bottom:3rem}
+.terminal-bar{background:#1a1a1a;padding:.55rem 1rem;display:flex;gap:6px;align-items:center}
+.terminal-dot{width:10px;height:10px;border-radius:50%}.terminal-dot:nth-child(1){background:#ff5f56}.terminal-dot:nth-child(2){background:#ffbd2e}.terminal-dot:nth-child(3){background:#27ca40}
+.terminal-title{font-family:'Source Code Pro',monospace;font-size:.65rem;color:#555;margin-left:.5rem}
+.terminal-body{padding:1.2rem 1.4rem;font-family:'Source Code Pro',monospace;font-size:.78rem;line-height:2}
+.terminal-body .prompt{color:var(--sage)}.terminal-body .cmd{color:var(--cream)}.terminal-body .comment{color:#444;font-style:italic}.terminal-body .output{color:var(--spark)}.terminal-body .status{color:var(--mist)}
+
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1.5rem}
+.step{text-align:center;padding:1.5rem 1rem;background:rgba(45,74,45,.15);border:1px solid rgba(90,122,90,.15);transition:all .3s ease}
+.step:hover{border-color:rgba(232,168,56,.3);background:rgba(45,74,45,.25)}
+.step-num{font-family:'Playfair Display',serif;font-size:2rem;color:var(--spark);font-style:italic;margin-bottom:.5rem}
+.step-label{font-family:'Source Code Pro',monospace;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--spark);margin-bottom:.4rem}
+.step-desc{font-size:.8rem;color:var(--mist);line-height:1.5}
+
+.features{padding:6rem 2rem;position:relative;overflow:hidden}
+.features-bg{position:absolute;inset:0;background:url('./images/wandr-features-canopy.jpg') center/cover;filter:brightness(.1) saturate(.5)}
+.features-overlay{position:absolute;inset:0;background:linear-gradient(180deg,var(--forest) 0%,rgba(13,31,13,.9) 30%,rgba(13,31,13,.9) 70%,var(--deep) 100%)}
+.features-inner{max-width:1000px;margin:0 auto;position:relative;z-index:1}
+.feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.5rem}
+.feature-card{background:rgba(13,31,13,.6);border:1px solid rgba(90,122,90,.2);padding:2rem;backdrop-filter:blur(10px);transition:all .3s ease}
+.feature-card:hover{border-color:var(--spark);transform:translateY(-3px);box-shadow:0 8px 30px rgba(0,0,0,.4)}
+.feature-icon{font-size:1.4rem;margin-bottom:.8rem;display:block}
+.feature-card h3{font-family:'Source Code Pro',monospace;font-size:.8rem;letter-spacing:.05em;color:var(--spark);margin-bottom:.6rem}
+.feature-card p{font-size:.88rem;color:var(--mist);line-height:1.6}
+
+.security{padding:6rem 2rem;background:var(--deep);border-top:1px solid rgba(90,122,90,.15);border-bottom:1px solid rgba(90,122,90,.15)}
+.security-inner{max-width:700px;margin:0 auto;text-align:center}
+.security-icon{font-size:2.5rem;margin-bottom:1.5rem;display:block}
+.security-inner p{color:var(--mist);line-height:1.8;font-size:1rem;max-width:600px;margin:0 auto}
+
+.scaffold{padding:6rem 2rem;position:relative;overflow:hidden}
+.scaffold-bg{position:absolute;inset:0;background:linear-gradient(135deg,var(--forest) 0%,var(--deep) 100%)}
+.scaffold-inner{max-width:750px;margin:0 auto;position:relative;z-index:1}
+.scaffold-inner p{color:var(--mist);line-height:1.8;font-size:.98rem}
+.scaffold-tags{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:2rem;justify-content:center}
+.scaffold-tag{font-family:'Source Code Pro',monospace;font-size:.7rem;padding:.4rem .8rem;border:1px solid rgba(90,122,90,.3);color:var(--sage);letter-spacing:.05em}
+.scaffold-tag.current{border-color:var(--spark);color:var(--spark)}
+
+.cta{padding:8rem 2rem;position:relative;overflow:hidden;text-align:center}
+.cta-bg{position:absolute;inset:0;background:url('./images/wandr-cta-mountains.jpg') center/cover;filter:brightness(.2) saturate(.7)}
+.cta-overlay{position:absolute;inset:0;background:linear-gradient(180deg,var(--deep) 0%,rgba(13,31,13,.6) 50%,rgba(13,31,13,.95) 100%),radial-gradient(ellipse 50% 50% at 50% 50%,rgba(232,168,56,.05),transparent)}
+.cta-inner{max-width:600px;margin:0 auto;position:relative;z-index:1}
+.cta h2{font-family:'Playfair Display',serif;font-size:clamp(2rem,5vw,3.2rem);margin-bottom:1rem}
+.cta p{color:var(--mist);margin-bottom:2.5rem;line-height:1.7;font-size:1.05rem}
+
+.stack{padding:3rem 2rem;background:var(--deep);text-align:center}
+.stack-tags{display:flex;flex-wrap:wrap;gap:.4rem;justify-content:center;margin-top:1rem}
+.stack-tag{font-family:'Source Code Pro',monospace;font-size:.7rem;padding:.35rem .7rem;border:1px solid rgba(90,122,90,.3);color:var(--sage);letter-spacing:.05em}
+
+footer{padding:2rem;text-align:center;font-family:'Source Code Pro',monospace;font-size:.65rem;color:var(--sage);letter-spacing:.1em}
+footer a{color:var(--spark);text-decoration:none}
+
+@media(max-width:768px){.hero{padding:4rem 1.5rem}.origin-words{flex-direction:column;gap:1.5rem}.steps{grid-template-columns:1fr 1fr}.scaffold-tags{justify-content:flex-start}}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HERO — "The trail is the war room"
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-overlay"></div>
+  <div class="firefly"></div><div class="firefly"></div><div class="firefly"></div><div class="firefly"></div><div class="firefly"></div>
+  <div class="hero-content">
+    <div class="hero-badge">Open Source · MIT License</div>
+    <h1><span class="accent">Wandr</span></h1>
+    <p class="hero-sub">Think on your feet. Ship from the trail.</p>
+    <p class="hero-desc">Wandr is a remote command and observability layer for AI coding agents. Talk to your agents while you walk, dispatch real work, and watch it ship in real time. The trail is the war room.</p>
+    <div class="hero-cta">
+      <a href="https://github.com/robertjorndorff-collab/wandr" class="btn btn-primary">View on GitHub</a>
+      <a href="#how" class="btn btn-ghost">See How It Works</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     ORIGIN — wander + wand
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="origin">
+  <div class="origin-bg"></div>
+  <div class="origin-overlay"></div>
+  <div class="origin-inner">
+    <div class="origin-quote">The name is a portmanteau — and a philosophy.</div>
+    <div class="origin-words">
+      <div class="origin-word">
+        <h3>Wander</h3>
+        <p>Staying in motion. The best thinking happens when you're not at a desk. Step away. Let the trail do the work.</p>
+      </div>
+      <div class="origin-word">
+        <h3>Wand</h3>
+        <p>Commanding with a word. Open your phone on the trail, speak the incantation, and your agents execute. Magic at a distance.</p>
+      </div>
+    </div>
+    <p class="origin-story">Born from a real workflow: the best product thinking happens in motion, but the agents building it are tied to a terminal. Wandr was built so the walk <em>is</em> the work session — think out loud with your AI strategist, sketch architecture on the move, ship features between mile markers. Your brain does the creating. Your agents do the building. Nobody waits for anybody.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HOW IT WORKS — "Your trail. Their terminal."
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="how" id="how">
+  <div class="how-inner">
+    <div class="section-label">In Practice</div>
+    <h2 class="section-title">Your trail. Their terminal.</h2>
+    <div class="terminal">
+      <div class="terminal-bar"><div class="terminal-dot"></div><div class="terminal-dot"></div><div class="terminal-dot"></div><span class="terminal-title">You → Your Agents</span></div>
+      <div class="terminal-body">
+        <div><span class="prompt">you (on a trail)  </span><span class="cmd">sketch a new onboarding flow — three steps,</span></div>
+        <div><span class="cmd" style="padding-left:10.5em">progressive disclosure, store completion in redis</span></div>
+        <div><span class="output">🟢 [backend] TASK RECEIVED</span></div>
+        <div><span class="status">💬 [backend] Designing the step schema...</span></div>
+        <div><span class="status">💬 [backend] Built OnboardingWizard component + API routes</span></div>
+        <div><span class="status">💬 [backend] Committed: feat(onboarding): three-step progressive flow</span></div>
+        <div><span class="output">✅ [backend] TASK COMPLETE — idle</span></div>
+        <div style="margin-top:.4rem"><span class="comment"># You had the idea crossing a creek. It shipped before the next mile marker.</span></div>
+      </div>
+    </div>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-label">Launch</div><div class="step-desc">One command starts your agent in tmux with full Wandr wiring</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-label">Tail</div><div class="step-desc">Sidecar streams clean output to your channel, noise stripped</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-label">Think</div><div class="step-desc">Talk to your AI lead from anywhere — phone, trail, coffee shop</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-label">Watch</div><div class="step-desc">Checkpoints, heartbeats, watchdog — always know the state</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-label">Queue</div><div class="step-desc">Commands queue up, next task fires when idle</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     FEATURES
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="features">
+  <div class="features-bg"></div>
+  <div class="features-overlay"></div>
+  <div class="features-inner">
+    <div class="section-label">Capabilities</div>
+    <h2 class="section-title">Everything you need. Nothing you don't.</h2>
+    <div class="feature-grid">
+      <div class="feature-card"><span class="feature-icon">📡</span><h3>Live Streaming</h3><p>Agent output flows to your channel in real time. TUI noise, spinners, ANSI artifacts — all stripped. Just clean, readable work.</p></div>
+      <div class="feature-card"><span class="feature-icon">⚡</span><h3>Command Dispatch</h3><p>Send prompts to any agent from your phone. <code style="color:var(--spark)">!backend sketch the new auth flow</code> — from a trail, a park bench, anywhere.</p></div>
+      <div class="feature-card"><span class="feature-icon">🟢</span><h3>Checkpoints</h3><p>Automatic status: received, working, complete, stalled. Know every agent's state without asking.</p></div>
+      <div class="feature-card"><span class="feature-icon">📋</span><h3>Task Queue</h3><p>Multiple commands queue automatically. Next task fires when the agent goes idle. No dropped work.</p></div>
+      <div class="feature-card"><span class="feature-icon">🔍</span><h3>Watchdog</h3><p>Detects stalled agents, alerts you, auto-restarts on context exhaustion. Nothing goes dark.</p></div>
+      <div class="feature-card"><span class="feature-icon">🧹</span><h3>Noise Filtering</h3><p>Thinking spam, spinner glyphs, duplicate lines — throttled or killed. Your channel stays clean.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SECURITY — the guardian layer
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="security">
+  <div class="security-inner">
+    <span class="security-icon">🛡️</span>
+    <div class="section-label">Trust & Security</div>
+    <h2 class="section-title">Nothing sensitive gets out.</h2>
+    <p>Your agents run locally. Your source code never leaves your machine. But agent output does flow through your messaging platform — that's the whole point. So Wandr stands guard at the gate. Every line passes through a redaction layer before transmission: API keys, tokens, environment variables, connection strings, credentials — pattern-matched and scrubbed. What reaches your channel is clean operational output: status updates, commit messages, work logs. The raw material stays home. The secrets stay buried. Nothing sensitive shall pass.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     OPEN SCAFFOLD — MVP stack + fork invitation
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="scaffold">
+  <div class="scaffold-bg"></div>
+  <div class="scaffold-inner">
+    <div class="section-label">Open Scaffold</div>
+    <h2 class="section-title">This is the MVP. Make it yours.</h2>
+    <p>Wandr ships today with Claude Code and Slack — because that's what we run and that's what works. But the pattern is the product, not the dependencies. Log tailer, input bridge, checkpoint protocol, task queue — all transport-agnostic. Fork the repo. Swap Slack for Discord, Teams, or a raw websocket. Replace Claude with any AI coding agent that takes a prompt and returns output. This is an open scaffold, not a locked ecosystem. Build your own war room.</p>
+    <div class="scaffold-tags">
+      <span class="scaffold-tag current">Claude Code</span>
+      <span class="scaffold-tag current">Slack</span>
+      <span class="scaffold-tag">Discord</span>
+      <span class="scaffold-tag">Teams</span>
+      <span class="scaffold-tag">Cursor</span>
+      <span class="scaffold-tag">Cline</span>
+      <span class="scaffold-tag">Aider</span>
+      <span class="scaffold-tag">Goose</span>
+      <span class="scaffold-tag">Websocket</span>
+      <span class="scaffold-tag">Your Stack</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     CTA — "Stop sitting. Start thinking."
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="cta">
+  <div class="cta-bg"></div>
+  <div class="cta-overlay"></div>
+  <div class="cta-inner">
+    <h2>Stop sitting.<br>Start <span style="color:var(--spark);font-style:italic">thinking.</span></h2>
+    <p>Your best architecture decisions happened on a walk. Your sharpest product instincts fire when your legs are moving and your screen is off. Wandr turns that into a shipping pipeline. Talk to your AI lead. Prototype at the speed of thought. Come home to committed code.</p>
+    <p style="margin-top:1rem;color:var(--mist);opacity:.7;font-size:.9rem">This isn't vibe coding. It's a one-person product studio that runs at the speed of a good walk.</p>
+    <a href="https://github.com/robertjorndorff-collab/wandr" class="btn btn-primary" style="margin-top:1rem">Get Started →</a>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     STACK + AXIS PRAXIS
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="stack">
+  <div class="section-label" style="margin-bottom:.5rem">Built With</div>
+  <div class="stack-tags">
+    <span class="stack-tag">TypeScript</span><span class="stack-tag">Node.js</span><span class="stack-tag">Redis</span><span class="stack-tag">Slack Bolt</span><span class="stack-tag">tmux</span><span class="stack-tag">Claude Code</span><span class="stack-tag">MIT License</span>
+  </div>
+  <p style="margin-top:2rem;color:var(--mist);font-size:.9rem;max-width:600px;margin-left:auto;margin-right:auto;line-height:1.6">
+    Wandr was built under <a href="https://axispraxis.ai" style="color:var(--spark);text-decoration:none;border-bottom:1px solid rgba(232,168,56,0.3)">AXIS PRAXIS</a> — an AI governance framework for teams that treat agents as collaborators, not toys. AXIS PRAXIS writes the rules. Wandr keeps the faith.
+  </p>
+</section>
+
+<footer>
+  <p>Wandr is open source · <a href="https://github.com/robertjorndorff-collab/wandr">GitHub</a> · MIT License</p>
+  <p style="margin-top:.5rem;opacity:.5">Not all who wander are lost.</p>
+</footer>
+
+</body>
+</html>

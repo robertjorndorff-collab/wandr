@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isNoiseLine, stripAnsi, redactSecrets } from '../log-tailer.js';
+import { isNoiseLine, stripAnsi, redactSecrets, detectMcpAlert } from '../log-tailer.js';
 
 describe('stripAnsi', () => {
   it('removes CSI color codes', () => {
@@ -68,6 +68,46 @@ describe('isNoiseLine — should keep', () => {
       expect(isNoiseLine(line)).toBe(false);
     });
   }
+});
+
+describe('detectMcpAlert', () => {
+  it('detects "MCP server failed"', () => {
+    expect(detectMcpAlert('1 MCP server failed')).toBe('MCP server failed');
+  });
+
+  it('detects "MCP server needs auth"', () => {
+    expect(detectMcpAlert('1 MCP server needs auth')).toBe('MCP server needs auth');
+  });
+
+  it('detects "connector unavailable"', () => {
+    expect(detectMcpAlert('1 claude.ai connector unavailable')).toBe('claude.ai connector unavailable');
+  });
+
+  it('detects "connector needs auth"', () => {
+    expect(detectMcpAlert('claude.ai connector needs auth')).toBe('connector needs auth');
+  });
+
+  it('detects "MCP server timed out"', () => {
+    expect(detectMcpAlert('MCP server timed out after 30s')).toBe('MCP server timed out');
+  });
+
+  it('detects MCP server error variant', () => {
+    expect(detectMcpAlert('2 MCP server error')).toBe('MCP server failed');
+  });
+
+  it('returns null for normal output', () => {
+    expect(detectMcpAlert('Refactoring the message queue')).toBeNull();
+  });
+
+  it('returns null for unrelated error', () => {
+    expect(detectMcpAlert('Error: ECONNREFUSED 127.0.0.1:6379')).toBeNull();
+  });
+});
+
+describe('isNoiseLine — MCP lines are NOT filtered', () => {
+  it('keeps "connector needs auth" (handled by mcp-alert instead)', () => {
+    expect(isNoiseLine('claude.ai connector needs auth')).toBe(false);
+  });
 });
 
 describe('redactSecrets', () => {

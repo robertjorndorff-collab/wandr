@@ -20,7 +20,7 @@ export interface ApprovalRequest {
 
 export interface AgentStatus {
   agentId: string;
-  state: 'running' | 'idle' | 'waiting_approval' | 'stopped' | 'error';
+  state: 'running' | 'idle' | 'waiting_approval' | 'stopped' | 'error' | 'degraded';
   pid?: number;
   startedAt: string;
   lastActivity: string;

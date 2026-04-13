@@ -1,0 +1,50 @@
+#!/bin/bash
+# wandr — One command. Always works.
+# Usage: wandr
+# That's it. Kills everything, starts everything.
+
+set -e
+WANDR_DIR="$HOME/Desktop/Wandr"
+cd "$WANDR_DIR"
+
+echo ""
+echo "╔══════════════════════════════════════╗"
+echo "║  WANDR — Full System Reset           ║"
+echo "╚══════════════════════════════════════╝"
+echo ""
+
+# Kill all existing agents (ignore errors if not running)
+echo "[wandr] Cleaning up..."
+node dist/index.js down wandr 2>/dev/null || true
+node dist/index.js down ljs 2>/dev/null || true
+node dist/index.js down consultcommando 2>/dev/null || true
+node dist/index.js down trover 2>/dev/null || true
+node dist/index.js down village 2>/dev/null || true
+
+# Kill any orphaned tmux sessions
+tmux kill-session -t wandr 2>/dev/null || true
+tmux kill-session -t ljs 2>/dev/null || true
+tmux kill-session -t consultcommando 2>/dev/null || true
+tmux kill-session -t trover 2>/dev/null || true
+tmux kill-session -t village 2>/dev/null || true
+
+# Start Redis if not running
+if ! redis-cli ping > /dev/null 2>&1; then
+  echo "[wandr] Starting Redis..."
+  redis-server --daemonize yes
+fi
+echo "[wandr] ✓ Redis"
+
+# Start agents
+echo "[wandr] Starting wandr..."
+node dist/index.js up wandr
+echo ""
+echo "[wandr] Starting ljs..."
+node dist/index.js up ljs
+echo ""
+
+echo "╔══════════════════════════════════════╗"
+echo "║  WANDR + LJS online.                 ║"
+echo "║  Slack: !wandr or !ljs               ║"
+echo "║  Attach: tmux attach -t ljs          ║"
+echo "╚══════════════════════════════════════╝"
