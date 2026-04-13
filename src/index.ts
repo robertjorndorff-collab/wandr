@@ -271,7 +271,14 @@ async function mainAttach(agentId: string): Promise<void> {
     socketMode: true,
   });
 
+  // Global error handler — prevents Bolt from silently dropping messages
+  // after an unhandled error in any listener.
+  slackApp.error(async (error) => {
+    console.error(`[wandr:attach] Bolt error: ${error.message ?? error}`);
+  });
+
   slackApp.message(async ({ message, say }) => {
+    try {
     const skipSubtypes = new Set(['bot_message', 'message_changed', 'message_deleted', 'message_replied']);
     if (message.subtype && skipSubtypes.has(message.subtype)) return;
     if (!('text' in message) || !message.text) return;
@@ -350,6 +357,9 @@ async function mainAttach(agentId: string): Promise<void> {
     isBusy = true;
     await say(`:rocket: Command sent to \`${agentId}\`: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`);
     void dispatch(prompt);
+    } catch (err) {
+      console.error(`[wandr:attach] Message handler error: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 
   // Start manager API
@@ -427,6 +437,11 @@ async function mainSpawn(agentId: string, command: string, extraArgs: string[]):
     socketMode: true,
   });
 
+  // Global error handler — prevents Bolt from silently dropping messages
+  slackApp.error(async (error) => {
+    console.error(`[wandr] Bolt error: ${error.message ?? error}`);
+  });
+
   // Catch-all event listener for debugging — log every event type received
   slackApp.event(/.*/, async ({ event }) => {
     console.log(`[wandr:debug] Event received: type=${event.type} subtype=${'subtype' in event ? event.subtype : 'none'}`);
@@ -440,6 +455,7 @@ async function mainSpawn(agentId: string, command: string, extraArgs: string[]):
 
   // Listen for task commands: !<agent-id> <prompt>
   slackApp.message(async ({ message, say }) => {
+    try {
     console.log(`[wandr:debug] message handler fired — subtype=${message.subtype ?? 'none'}, hasText=${'text' in message}, channel=${'channel' in message ? message.channel : '?'}`);
 
     // Only skip bot messages and message_changed/deleted subtypes.
@@ -516,6 +532,9 @@ async function mainSpawn(agentId: string, command: string, extraArgs: string[]):
         await say(`:x: \`${agentId}\` task failed: ${errMsg}`);
       }
     })();
+    } catch (err) {
+      console.error(`[wandr] Message handler error: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 
   // Start manager API
@@ -599,6 +618,25 @@ async function main(): Promise<void> {
   }
   await mainSpawn(agentId, command, extraArgs);
 }
+
+// ─── Global Safety Nets ────────────────────────────────────────────
+// The @slack/socket-mode finity state machine can throw synchronous errors
+// when disconnect events arrive during the "connecting" state. Without these
+// handlers the process crashes silently and the sidecar goes dark.
+process.on('uncaughtException', (err) => {
+  // Known finity bug: "Unhandled event 'server explicit disconnect' in state 'connecting'"
+  // The Socket Mode client recovers on its own — just log and continue.
+  if (err.message?.includes('Unhandled event') && err.message?.includes('in state')) {
+    console.error(`[wandr] Socket Mode state machine error (non-fatal): ${err.message}`);
+    return;
+  }
+  console.error('[wandr] Uncaught exception:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[wandr] Unhandled rejection:', reason);
+});
 
 main().catch((err) => {
   console.error('[wandr] Fatal:', err);
