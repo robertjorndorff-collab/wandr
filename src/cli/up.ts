@@ -53,7 +53,14 @@ function tmuxHasSession(name: string): boolean {
 }
 
 export async function runUp(agentId: string, claudeArgs: string[]): Promise<void> {
-  console.log(`[wandr] Bringing up agent: ${agentId}`);
+  // Extract --orchestrator flag (not a Claude arg)
+  const orchestratorIdx = claudeArgs.indexOf('--orchestrator');
+  const isOrchestrator = orchestratorIdx !== -1;
+  if (isOrchestrator) {
+    claudeArgs.splice(orchestratorIdx, 1);
+  }
+
+  console.log(`[wandr] Bringing up agent: ${agentId}${isOrchestrator ? ' (orchestrator)' : ''}`);
 
   const pre = await runPreflight(agentId);
   if (!pre.ok) {
@@ -90,6 +97,11 @@ export async function runUp(agentId: string, claudeArgs: string[]): Promise<void
   console.log(`[wandr] \u2713 Manager API port: ${agentPort}`);
 
   // ── 2. Start sidecar detached, stdio → sidecar log ────────────────
+  if (isOrchestrator) {
+    process.env.WANDR_ORCHESTRATOR = '1';
+    console.log(`[wandr] ✓ Orchestrator mode — this sidecar routes all !commands`);
+  }
+
   const sidecarEntry = process.env.WANDR_DEV
     ? { cmd: 'tsx', args: ['src/index.ts', '--attach', agentId] }
     : { cmd: 'node', args: ['dist/index.js', '--attach', agentId] };

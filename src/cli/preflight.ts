@@ -33,11 +33,16 @@ export interface PreflightResult {
   warnings: string[];
 }
 
+// SLACK_APP_TOKEN and SLACK_SIGNING_SECRET are only required for the orchestrator
+// sidecar (the one that opens Socket Mode). Plain agent sidecars use REST API only.
 const REQUIRED_ENV = [
   'SLACK_BOT_TOKEN',
+  'SLACK_CHANNEL_ID',
+];
+
+const ORCHESTRATOR_ENV = [
   'SLACK_APP_TOKEN',
   'SLACK_SIGNING_SECRET',
-  'SLACK_CHANNEL_ID',
 ];
 
 function ok(msg: string): void {
@@ -69,6 +74,18 @@ export async function runPreflight(agentId: string): Promise<PreflightResult> {
     result.ok = false;
   } else {
     ok(`.env loaded (channel ${process.env.SLACK_CHANNEL_ID})`);
+  }
+
+  // 1b. Orchestrator-specific env vars
+  if (process.env.WANDR_ORCHESTRATOR === '1') {
+    const missingOrch = ORCHESTRATOR_ENV.filter((k) => !process.env[k]);
+    if (missingOrch.length > 0) {
+      fail(`Orchestrator mode requires: ${missingOrch.join(', ')}`);
+      result.errors.push(`missing orchestrator env: ${missingOrch.join(',')}`);
+      result.ok = false;
+    } else {
+      ok(`Orchestrator env vars present`);
+    }
   }
 
   // 2. Redis ping

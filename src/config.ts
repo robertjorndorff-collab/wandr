@@ -15,8 +15,11 @@ function optional(key: string, fallback: string): string {
 export const config = {
   slack: {
     botToken: required('SLACK_BOT_TOKEN'),
-    appToken: required('SLACK_APP_TOKEN'),
-    signingSecret: required('SLACK_SIGNING_SECRET'),
+    // appToken and signingSecret are only needed by the orchestrator sidecar
+    // (the one that opens a Socket Mode connection for inbound commands).
+    // Plain agent sidecars use REST API only for outbound messages.
+    appToken: optional('SLACK_APP_TOKEN', ''),
+    signingSecret: optional('SLACK_SIGNING_SECRET', ''),
     channelId: required('SLACK_CHANNEL_ID'),
   },
   redis: {

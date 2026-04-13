@@ -58,18 +58,35 @@ function printUsage(): void {
 }
 
 // ─── Attach Mode ────────────────────────────────────────────────────
+//
+// Two sub-modes controlled by WANDR_ORCHESTRATOR env var:
+//
+//   Orchestrator (WANDR_ORCHESTRATOR=1):
+//     Opens a single Socket Mode connection to Slack. Receives ALL inbound
+//     !commands, matches the agent prefix, and routes to the correct agent's
+//     input bridge at ~/.wandr/input/<agentId>.cmd. Also runs its own sidecar
+//     duties (log tail, checkpoint, etc.) for the orchestrator agent.
+//
+//   Plain sidecar (default):
+//     Outbound only — streams logs to Slack via REST API (WebClient), runs
+//     checkpoint heartbeats, watches its own .cmd file for commands routed
+//     by the orchestrator. Does NOT open Socket Mode.
+//
+// This eliminates the race condition where multiple Socket Mode connections
+// compete for the same inbound messages.
 
 async function mainAttach(agentId: string): Promise<void> {
+  const isOrchestrator = process.env.WANDR_ORCHESTRATOR === '1';
   const wandrHome = join(homedir(), '.wandr');
   const logPath = join(wandrHome, 'logs', `${agentId}.log`);
   const cmdPath = join(wandrHome, 'input', `${agentId}.cmd`);
 
-  // Initialize connections
+  // ── Common infrastructure (both orchestrator and plain sidecar) ──
+
   const redis = new Redis(config.redis.url);
   const slackClient = new WebClient(config.slack.botToken);
   const transport = new SlackTransport(slackClient, config.slack.channelId);
 
-  // State + message queue (reuse existing infra)
   const state = new StateStore(redis, agentId);
   const queue = new MessageQueue(
     redis,
@@ -82,75 +99,12 @@ async function mainAttach(agentId: string): Promise<void> {
     (messages) => transport.sendBatch(messages),
   );
 
-  // Checkpoint protocol — monitors activity and posts status to Slack
   const checkpoint = new Checkpoint(agentId, transport, logPath);
-
-  // Lexicon store
   const lexicon = new LexiconStore(join(process.cwd(), 'config', 'lexicon.json'));
 
-  // Operator-silence heartbeat (dead-man's switch)
-  let lastOperatorMessageAt = Date.now();
-  const operatorSilenceTimer = setInterval(() => {
-    if (Date.now() - lastOperatorMessageAt > OPERATOR_SILENCE_MS) {
-      void transport.postCheckpoint(
-        `👋 [${agentId}] OPERATOR CHECK-IN — no commands for 4h. Reply \`!ping\` to confirm presence.`,
-      );
-      lastOperatorMessageAt = Date.now(); // reset so we don't spam
-    }
-  }, 5 * 60 * 1000);
-
-  // Task queue — only one prompt in flight at a time
+  // Task queue for THIS agent — one prompt in flight at a time
   const taskQueue: string[] = [];
   let isBusy = false;
-
-  // Bot user ID — resolved lazily, cached. Used to scope !purge to bot's own messages.
-  let botUserIdPromise: Promise<string | null> | null = null;
-  const getBotUserId = (): Promise<string | null> => {
-    if (!botUserIdPromise) {
-      botUserIdPromise = slackClient.auth.test()
-        .then((r) => (r.user_id as string | undefined) ?? null)
-        .catch((err) => {
-          console.error(`[wandr:attach] auth.test failed: ${err instanceof Error ? err.message : String(err)}`);
-          return null;
-        });
-    }
-    return botUserIdPromise;
-  };
-
-  // Delete the most recent bot messages in the channel.
-  // limit === null means "all" (paginate through history).
-  const purgeBotMessages = async (limit: number | null): Promise<number> => {
-    const botUserId = await getBotUserId();
-    if (!botUserId) return 0;
-    const channel = config.slack.channelId;
-    let deleted = 0;
-    let cursor: string | undefined;
-    const target = limit ?? Infinity;
-
-    while (deleted < target) {
-      const resp = await slackClient.conversations.history({
-        channel,
-        limit: 100,
-        cursor,
-      });
-      const messages = (resp.messages ?? []) as Array<{ user?: string; bot_id?: string; ts?: string; subtype?: string }>;
-      for (const msg of messages) {
-        if (deleted >= target) break;
-        if (msg.user !== botUserId || !msg.ts) continue;
-        try {
-          await slackClient.chat.delete({ channel, ts: msg.ts });
-          deleted += 1;
-        } catch (err) {
-          console.error(`[wandr:attach] chat.delete failed for ts=${msg.ts}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-        // Tier 3 rate limit (~50/min) — 200ms spacing keeps us under.
-        await new Promise((r) => setTimeout(r, 200));
-      }
-      cursor = resp.response_metadata?.next_cursor;
-      if (!cursor) break;
-    }
-    return deleted;
-  };
 
   // Log tailer — watches the agent's log file
   const tailer = new LogTailer(logPath);
@@ -173,49 +127,36 @@ async function mainAttach(agentId: string): Promise<void> {
     }).then(() => state.incrementMessages());
   });
 
-  // ── MCP failure detection & recovery ──
-  // Track alerts to avoid spamming Slack with repeated failures for the same server.
+  // MCP failure detection
   const mcpAlertsSeen = new Set<string>();
 
   tailer.on('mcp-alert', (label: string, rawLine: string) => {
-    // Deduplicate: only alert once per unique label per session
     if (mcpAlertsSeen.has(label)) return;
     mcpAlertsSeen.add(label);
-
     console.error(`[wandr:attach] MCP failure detected: ${label}`);
-
-    // Post alert to #wandr-ops
     void transport.postCheckpoint(
       `⚠️ [${agentId}] MCP FAILURE: ${label}\n> \`${rawLine.slice(0, 200)}\``,
     );
-
-    // Update agent state to degraded
     void state.update({ state: 'degraded' });
-
-    // MCP recovery removed — /mcp opens an interactive TUI menu that
-    // crashes the input bridge loop. CEO handles MCP from tmux directly.
-    // Alert-only: operator sees the warning in Slack and decides.
   });
 
   tailer.on('error', (err: Error) => {
     console.error(`[wandr:attach] Tailer error: ${err.message}`);
   });
 
-  // Input bridge — receives Slack commands and writes to .cmd file
+  // Input bridge — watches .cmd file for commands routed by orchestrator
   const bridge = new InputBridge(cmdPath);
 
   bridge.on('ready', (path: string) => {
     console.log(`[wandr:attach] Input bridge watching: ${path}`);
   });
 
-  // Slack → bridge → tmux send-keys → Claude PTY
   bridge.on('command', (text: string) => {
     const has = spawnSync('tmux', ['has-session', '-t', agentId]);
     if (has.status !== 0) {
       console.error(`[wandr:attach] tmux session "${agentId}" missing — dropping command`);
       return;
     }
-    // -l sends literal text (no key-name interpretation), then a separate Enter.
     const a = spawnSync('tmux', ['send-keys', '-t', agentId, '-l', '--', text]);
     if (a.status !== 0) {
       console.error(`[wandr:attach] tmux send-keys (text) failed: ${a.stderr?.toString() ?? ''}`);
@@ -246,7 +187,6 @@ async function mainAttach(agentId: string): Promise<void> {
     }
   };
 
-  // Drain queue when current task completes
   checkpoint.on('task-complete', () => {
     const next = taskQueue.shift();
     if (next) {
@@ -256,117 +196,213 @@ async function mainAttach(agentId: string): Promise<void> {
     }
   });
 
-  // Watchdog re-dispatch path
   checkpoint.on('restart-redispatch', (prompt: string) => {
     void bridge.sendCommand(prompt).catch((err) => {
       console.error(`[wandr:attach] Re-dispatch failed: ${err instanceof Error ? err.message : String(err)}`);
     });
   });
 
-  // Start Slack listener for commands
-  const slackApp = new SlackApp({
-    token: config.slack.botToken,
-    appToken: config.slack.appToken,
-    signingSecret: config.slack.signingSecret,
-    socketMode: true,
-  });
+  // ── Orchestrator: Socket Mode listener + command routing ──
 
-  // Global error handler — prevents Bolt from silently dropping messages
-  // after an unhandled error in any listener.
-  slackApp.error(async (error) => {
-    console.error(`[wandr:attach] Bolt error: ${error.message ?? error}`);
-  });
+  let slackApp: InstanceType<typeof SlackApp> | null = null;
+  let operatorSilenceTimer: ReturnType<typeof setInterval> | null = null;
 
-  slackApp.message(async ({ message, say }) => {
-    try {
-    const skipSubtypes = new Set(['bot_message', 'message_changed', 'message_deleted', 'message_replied']);
-    if (message.subtype && skipSubtypes.has(message.subtype)) return;
-    if (!('text' in message) || !message.text) return;
-
-    const text = message.text.trim();
-    lastOperatorMessageAt = Date.now();
-
-    // !ping — presence ack (any agent answers, but only once per message)
-    if (PING_PATTERN.test(text)) {
-      await say(`:wave: \`${agentId}\` here. State: ${checkpoint.getState()}`);
-      return;
-    }
-
-    // !purge | !clear | !purge N | !purge all — delete this bot's own messages
-    const purgeMatch = text.match(PURGE_PATTERN);
-    if (purgeMatch) {
-      const arg = purgeMatch[1];
-      const limit: number | null = arg === 'all' ? null : arg ? parseInt(arg, 10) : 100;
-      const label = limit === null ? 'all' : String(limit);
-      await say(`:wastebasket: Purging up to ${label} bot messages...`);
-      try {
-        const n = await purgeBotMessages(limit);
-        await say(`:wastebasket: Purged ${n} message${n === 1 ? '' : 's'}.`);
-      } catch (err) {
-        await say(`:x: Purge failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      return;
-    }
-
-    // !lexicon list|add|rm
-    const lexMatch = text.match(LEXICON_PATTERN);
-    if (lexMatch) {
-      const [, op, key, rest] = lexMatch;
-      if (op === 'list') {
-        await say(`:books: *Lexicon*\n${await lexicon.list()}`);
-      } else if (op === 'add' && key && rest) {
-        await lexicon.add(key, rest.trim());
-        await say(`:white_check_mark: Lexicon: added \`${key}\``);
-      } else if (op === 'rm' && key) {
-        const removed = await lexicon.remove(key);
-        await say(removed ? `:wastebasket: Lexicon: removed \`${key}\`` : `:x: Lexicon: \`${key}\` not found`);
-      } else {
-        await say(`Usage: \`!lexicon list\` | \`!lexicon add <key> <description>\` | \`!lexicon rm <key>\``);
-      }
-      return;
-    }
-
-    // !spec <need> — on-demand capability ticket
-    const specMatch = text.match(SPEC_PATTERN);
-    if (specMatch) {
-      const need = specMatch[1].trim();
-      const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const slug = need.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-|-$/g, '');
-      const ticketPath = join(process.cwd(), 'TICKETS', `ondemand-${ts}-${slug}.md`);
-      const body = `# On-Demand: ${need}\n\n## Created: ${new Date().toISOString()}\n## Requested by: operator via Slack\n## Agent: ${agentId}\n\n## Need\n${need}\n\n## Status\n- [ ] Spec\n- [ ] Build\n- [ ] Deploy\n- [ ] Verify\n\n## Notes\nAuto-generated by \`!spec\` from #wandr-ops.\n`;
-      await mkdir(join(process.cwd(), 'TICKETS'), { recursive: true });
-      await writeFile(ticketPath, body, 'utf-8');
-      await say(`:memo: On-demand ticket created: \`${ticketPath.split('/').pop()}\``);
-      return;
-    }
-
-    const taskMatch = text.match(TASK_PATTERN);
-    if (!taskMatch) return;
-
-    const [, targetAgent, prompt] = taskMatch;
-    if (targetAgent !== agentId) return;
-
-    if (isBusy) {
-      taskQueue.push(prompt);
-      await transport.postCheckpoint(
-        `📋 [${agentId}] QUEUED: ${prompt.slice(0, 80)} (position ${taskQueue.length} in queue)`,
+  if (isOrchestrator) {
+    if (!config.slack.appToken || !config.slack.signingSecret) {
+      throw new Error(
+        'Orchestrator requires SLACK_APP_TOKEN and SLACK_SIGNING_SECRET. ' +
+        'Set these env vars or run without --orchestrator for outbound-only mode.',
       );
-      return;
     }
 
-    isBusy = true;
-    await say(`:rocket: Command sent to \`${agentId}\`: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`);
-    void dispatch(prompt);
-    } catch (err) {
-      console.error(`[wandr:attach] Message handler error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  });
+    // Operator-silence heartbeat (dead-man's switch) — only the orchestrator
+    // receives operator messages via Socket Mode, so only it can track silence.
+    let lastOperatorMessageAt = Date.now();
+    operatorSilenceTimer = setInterval(() => {
+      if (Date.now() - lastOperatorMessageAt > OPERATOR_SILENCE_MS) {
+        void transport.postCheckpoint(
+          `👋 [${agentId}] OPERATOR CHECK-IN — no commands for 4h. Reply \`!ping\` to confirm presence.`,
+        );
+        lastOperatorMessageAt = Date.now();
+      }
+    }, 5 * 60 * 1000);
 
-  // Start manager API
+    // Bot user ID — for !purge scoping
+    let botUserIdPromise: Promise<string | null> | null = null;
+    const getBotUserId = (): Promise<string | null> => {
+      if (!botUserIdPromise) {
+        botUserIdPromise = slackClient.auth.test()
+          .then((r) => (r.user_id as string | undefined) ?? null)
+          .catch((err) => {
+            console.error(`[wandr:orchestrator] auth.test failed: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+          });
+      }
+      return botUserIdPromise;
+    };
+
+    const purgeBotMessages = async (limit: number | null): Promise<number> => {
+      const botUserId = await getBotUserId();
+      if (!botUserId) return 0;
+      const channel = config.slack.channelId;
+      let deleted = 0;
+      let cursor: string | undefined;
+      const target = limit ?? Infinity;
+
+      while (deleted < target) {
+        const resp = await slackClient.conversations.history({
+          channel,
+          limit: 100,
+          cursor,
+        });
+        const messages = (resp.messages ?? []) as Array<{ user?: string; bot_id?: string; ts?: string; subtype?: string }>;
+        for (const msg of messages) {
+          if (deleted >= target) break;
+          if (msg.user !== botUserId || !msg.ts) continue;
+          try {
+            await slackClient.chat.delete({ channel, ts: msg.ts });
+            deleted += 1;
+          } catch (err) {
+            console.error(`[wandr:orchestrator] chat.delete failed for ts=${msg.ts}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        cursor = resp.response_metadata?.next_cursor;
+        if (!cursor) break;
+      }
+      return deleted;
+    };
+
+    slackApp = new SlackApp({
+      token: config.slack.botToken,
+      appToken: config.slack.appToken,
+      signingSecret: config.slack.signingSecret,
+      socketMode: true,
+    });
+
+    slackApp.error(async (error) => {
+      console.error(`[wandr:orchestrator] Bolt error: ${error.message ?? error}`);
+    });
+
+    slackApp.message(async ({ message, say }) => {
+      try {
+        const skipSubtypes = new Set(['bot_message', 'message_changed', 'message_deleted', 'message_replied']);
+        if (message.subtype && skipSubtypes.has(message.subtype)) return;
+        if (!('text' in message) || !message.text) return;
+
+        const text = message.text.trim();
+        lastOperatorMessageAt = Date.now();
+
+        // ── Global commands (not agent-specific) ──
+
+        // !ping — report all registered agents
+        if (PING_PATTERN.test(text)) {
+          const agents = await StateStore.getAllAgents(redis);
+          if (agents.length === 0) {
+            await say(`:wave: Orchestrator \`${agentId}\` online. No agents registered.`);
+          } else {
+            const lines = agents.map((a) =>
+              `  \`${a.agentId}\` — ${a.state} (last: ${new Date(a.lastActivity).toLocaleTimeString('en-US', { hour12: false })})`,
+            ).join('\n');
+            await say(`:wave: Orchestrator \`${agentId}\` online. Agents:\n${lines}`);
+          }
+          return;
+        }
+
+        // !purge | !clear
+        const purgeMatch = text.match(PURGE_PATTERN);
+        if (purgeMatch) {
+          const arg = purgeMatch[1];
+          const limit: number | null = arg === 'all' ? null : arg ? parseInt(arg, 10) : 100;
+          const label = limit === null ? 'all' : String(limit);
+          await say(`:wastebasket: Purging up to ${label} bot messages...`);
+          try {
+            const n = await purgeBotMessages(limit);
+            await say(`:wastebasket: Purged ${n} message${n === 1 ? '' : 's'}.`);
+          } catch (err) {
+            await say(`:x: Purge failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          return;
+        }
+
+        // !lexicon list|add|rm
+        const lexMatch = text.match(LEXICON_PATTERN);
+        if (lexMatch) {
+          const [, op, key, rest] = lexMatch;
+          if (op === 'list') {
+            await say(`:books: *Lexicon*\n${await lexicon.list()}`);
+          } else if (op === 'add' && key && rest) {
+            await lexicon.add(key, rest.trim());
+            await say(`:white_check_mark: Lexicon: added \`${key}\``);
+          } else if (op === 'rm' && key) {
+            const removed = await lexicon.remove(key);
+            await say(removed ? `:wastebasket: Lexicon: removed \`${key}\`` : `:x: Lexicon: \`${key}\` not found`);
+          } else {
+            await say(`Usage: \`!lexicon list\` | \`!lexicon add <key> <description>\` | \`!lexicon rm <key>\``);
+          }
+          return;
+        }
+
+        // !spec <need> — on-demand capability ticket
+        const specMatch = text.match(SPEC_PATTERN);
+        if (specMatch) {
+          const need = specMatch[1].trim();
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          const slug = need.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-|-$/g, '');
+          const ticketPath = join(process.cwd(), 'TICKETS', `ondemand-${ts}-${slug}.md`);
+          const body = `# On-Demand: ${need}\n\n## Created: ${new Date().toISOString()}\n## Requested by: operator via Slack\n## Agent: ${agentId}\n\n## Need\n${need}\n\n## Status\n- [ ] Spec\n- [ ] Build\n- [ ] Deploy\n- [ ] Verify\n\n## Notes\nAuto-generated by \`!spec\` from #wandr-ops.\n`;
+          await mkdir(join(process.cwd(), 'TICKETS'), { recursive: true });
+          await writeFile(ticketPath, body, 'utf-8');
+          await say(`:memo: On-demand ticket created: \`${ticketPath.split('/').pop()}\``);
+          return;
+        }
+
+        // ── Agent-targeted commands: !<agentId> <prompt> ──
+
+        const taskMatch = text.match(TASK_PATTERN);
+        if (!taskMatch) return;
+
+        const [, targetAgent, prompt] = taskMatch;
+
+        if (targetAgent === agentId) {
+          // Route to self — use local dispatch with queue
+          if (isBusy) {
+            taskQueue.push(prompt);
+            await transport.postCheckpoint(
+              `📋 [${agentId}] QUEUED: ${prompt.slice(0, 80)} (position ${taskQueue.length} in queue)`,
+            );
+            return;
+          }
+          isBusy = true;
+          await say(`:rocket: Command sent to \`${agentId}\`: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`);
+          void dispatch(prompt);
+        } else {
+          // Route to another agent — write directly to their .cmd file.
+          // The target agent's InputBridge polls this file and injects into tmux.
+          const targetCmdPath = join(wandrHome, 'input', `${targetAgent}.cmd`);
+          try {
+            await writeFile(targetCmdPath, prompt, 'utf-8');
+            await say(`:rocket: Command routed to \`${targetAgent}\`: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`);
+            console.log(`[wandr:orchestrator] Routed command to ${targetAgent} (${prompt.length} chars)`);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            await say(`:x: Failed to route to \`${targetAgent}\`: ${errMsg}`);
+            console.error(`[wandr:orchestrator] Route failed for ${targetAgent}: ${errMsg}`);
+          }
+        }
+      } catch (err) {
+        console.error(`[wandr:orchestrator] Message handler error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+
+    await slackApp.start();
+    console.log(`[wandr:orchestrator] Socket Mode active — routing commands for all agents`);
+  }
+
+  // ── Start common services ──
+
   const api = new ManagerAPI(redis);
 
-  // Start everything
-  await slackApp.start();
   await api.start(config.api.port, config.api.host);
   await state.register();
   queue.start();
@@ -378,28 +414,31 @@ async function mainAttach(agentId: string): Promise<void> {
     timestamp: new Date().toISOString(),
     agentId,
     type: 'system',
-    content: `Sidecar attached to \`${agentId}\` (tail mode). Streaming output to Slack.`,
+    content: `Sidecar attached to \`${agentId}\` (${isOrchestrator ? 'orchestrator' : 'outbound-only'}). Streaming output to Slack.`,
   });
 
   console.log(`[wandr:attach] READY`);
   console.log(`[wandr:attach] Sidecar attached to agent "${agentId}"`);
+  console.log(`[wandr:attach] Mode: ${isOrchestrator ? 'ORCHESTRATOR (Socket Mode + routing)' : 'SIDECAR (outbound REST only)'}`);
   console.log(`[wandr:attach] Log file: ${logPath}`);
   console.log(`[wandr:attach] Input bridge: ${cmdPath}`);
   console.log(`[wandr:attach] Slack channel: ${config.slack.channelId}`);
   console.log(`[wandr:attach] Manager API: http://${config.api.host}:${config.api.port}`);
-  console.log(`[wandr:attach] Send commands in Slack: !${agentId} <prompt>`);
+  if (isOrchestrator) {
+    console.log(`[wandr:attach] Send commands in Slack: !<agent-id> <prompt>`);
+  }
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n[wandr:attach] Received ${signal}, shutting down...`);
-    clearInterval(operatorSilenceTimer);
+    if (operatorSilenceTimer) clearInterval(operatorSilenceTimer);
     checkpoint.stop();
     tailer.stop();
     bridge.stop();
     queue.stop();
     await state.deregister();
     await api.stop();
-    await slackApp.stop();
+    if (slackApp) await slackApp.stop();
     redis.disconnect();
     process.exit(0);
   };
