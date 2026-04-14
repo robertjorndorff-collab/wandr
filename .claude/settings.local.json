@@ -1,6 +1,5 @@
 {
   "permissions": {
-    "defaultMode": "bypassPermissions",
     "deny": [
       "Bash(rm -rf *)",
       "Bash(rm -r /)*",
@@ -25,6 +24,12 @@
       "Read(**/.env.*)",
       "Write(**/.env)",
       "Write(**/.env.*)"
+    ],
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash(rm /Users/robertorndorff/Desktop/Wandr/.git/index.lock)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }
