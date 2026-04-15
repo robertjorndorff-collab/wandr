@@ -63,6 +63,12 @@ export async function runUp(agentId: string, claudeArgs: string[]): Promise<void
     isOrchestrator = true;
   }
 
+  // Headless agents must never block on Claude Code's trust prompt.
+  // Project directories without .git trigger it; passing this flag skips it.
+  if (!claudeArgs.includes('--dangerously-skip-permissions')) {
+    claudeArgs.unshift('--dangerously-skip-permissions');
+  }
+
   console.log(`[wandr] Bringing up agent: ${agentId}${isOrchestrator ? ' (orchestrator)' : ''}`);
 
   const pre = await runPreflight(agentId);
