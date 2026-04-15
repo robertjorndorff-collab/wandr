@@ -8,6 +8,29 @@ import { mkdir, access, constants } from 'node:fs/promises';
 
 const MANAGER_PORT = Number(process.env.MANAGER_API_PORT) || 9400;
 
+async function pingRedis(url: string): Promise<boolean> {
+  const redis = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1, connectTimeout: 2000 });
+  try {
+    await redis.connect();
+    await redis.ping();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    redis.disconnect();
+  }
+}
+
+function tryStartRedis(): boolean {
+  try {
+    const r = execSync('redis-server --daemonize yes', { stdio: ['ignore', 'pipe', 'pipe'] });
+    void r;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function freePort(port: number): void {
   try {
     const out = execSync(`lsof -ti tcp:${port}`, { stdio: ['ignore', 'pipe', 'ignore'] })
@@ -88,19 +111,32 @@ export async function runPreflight(agentId: string): Promise<PreflightResult> {
     }
   }
 
-  // 2. Redis ping
+  // 2. Redis ping — auto-start if missing (watchdog requirement)
   const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
-  const redis = new Redis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
-  try {
-    await redis.connect();
-    await redis.ping();
+  const redisOk = await pingRedis(redisUrl);
+  if (redisOk) {
     ok(`Redis reachable (${redisUrl})`);
-  } catch (err) {
-    fail(`Redis unreachable at ${redisUrl}: ${(err as Error).message}`);
-    result.errors.push('redis');
-    result.ok = false;
-  } finally {
-    redis.disconnect();
+  } else {
+    warn(`Redis unreachable at ${redisUrl} — attempting auto-start via \`redis-server --daemonize yes\``);
+    const started = tryStartRedis();
+    if (!started) {
+      fail(`Could not auto-start Redis. Install redis (\`brew install redis\`) and retry.`);
+      result.errors.push('redis');
+      result.ok = false;
+    } else {
+      // Give it a moment to bind the socket
+      for (let i = 0; i < 10; i++) {
+        if (await pingRedis(redisUrl)) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      if (await pingRedis(redisUrl)) {
+        ok(`Redis auto-started (${redisUrl})`);
+      } else {
+        fail(`Redis started but is still not reachable at ${redisUrl}`);
+        result.errors.push('redis');
+        result.ok = false;
+      }
+    }
   }
 
   // 3. Slack auth.test

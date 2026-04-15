@@ -14,6 +14,7 @@ import { Checkpoint } from './sidecar/checkpoint.js';
 import { LexiconStore } from './sidecar/lexicon-store.js';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { StateStore } from './sidecar/state-store.js';
+import { HealthMonitor } from './sidecar/health-monitor.js';
 import { ManagerAPI } from './api/manager-api.js';
 import { runUp, runDown } from './cli/up.js';
 
@@ -101,6 +102,9 @@ async function mainAttach(agentId: string): Promise<void> {
 
   const checkpoint = new Checkpoint(agentId, transport, logPath);
   const lexicon = new LexiconStore(join(process.cwd(), 'config', 'lexicon.json'));
+
+  // Heartbeat pulse — orchestrator uses this to detect dead sidecars.
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   // Task queue for THIS agent — one prompt in flight at a time
   const taskQueue: string[] = [];
@@ -206,6 +210,9 @@ async function mainAttach(agentId: string): Promise<void> {
 
   let slackApp: InstanceType<typeof SlackApp> | null = null;
   let operatorSilenceTimer: ReturnType<typeof setInterval> | null = null;
+  let healthMonitor: HealthMonitor | null = null;
+  let redisWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+  let autoPurgeTimer: ReturnType<typeof setInterval> | null = null;
 
   if (isOrchestrator) {
     if (!config.slack.appToken || !config.slack.signingSecret) {
@@ -290,7 +297,7 @@ async function mainAttach(agentId: string): Promise<void> {
         if (message.subtype && skipSubtypes.has(message.subtype)) return;
         if (!('text' in message) || !message.text) return;
 
-        const text = message.text.trim();
+        const text = message.text.trim().replace(/\n?\*Sent using\*.*$/s, '').trim();
         lastOperatorMessageAt = Date.now();
 
         // ── Global commands (not agent-specific) ──
@@ -377,6 +384,17 @@ async function mainAttach(agentId: string): Promise<void> {
           await say(`:rocket: Command sent to \`${agentId}\`: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`);
           void dispatch(prompt);
         } else {
+          // Route to another agent — first confirm it's alive.
+          // If dead, notify operator + queue for replay after auto-recovery.
+          const health = healthMonitor ? await healthMonitor.checkAgent(targetAgent) : 'healthy';
+          if (health !== 'healthy') {
+            healthMonitor?.queueForReplay(targetAgent, prompt);
+            await say(
+              `:warning: \`${targetAgent}\` is unresponsive. Attempting auto-recovery — command queued and will replay when healthy.`,
+            );
+            return;
+          }
+
           // Route to another agent — write directly to their .cmd file.
           // The target agent's InputBridge polls this file and injects into tmux.
           const targetCmdPath = join(wandrHome, 'input', `${targetAgent}.cmd`);
@@ -395,8 +413,91 @@ async function mainAttach(agentId: string): Promise<void> {
       }
     });
 
+    // ── Health monitor + auto-recovery ──
+    // Created BEFORE slackApp.start() so the very first routed command
+    // already has a live health check + replay queue available.
+    healthMonitor = new HealthMonitor(redis, transport, agentId, process.cwd());
+    healthMonitor.on('replay', (targetAgent: string, prompt: string) => {
+      const targetCmdPath = join(wandrHome, 'input', `${targetAgent}.cmd`);
+      writeFile(targetCmdPath, prompt, 'utf-8')
+        .then(() => console.log(`[wandr:orchestrator] Replayed command to ${targetAgent} (${prompt.length} chars)`))
+        .catch((err) => console.error(
+          `[wandr:orchestrator] Replay write failed for ${targetAgent}: ${err instanceof Error ? err.message : String(err)}`,
+        ));
+    });
+    healthMonitor.start();
+
+    // ── Redis watchdog: alert ONCE if Redis goes away mid-session ──
+    let redisAlerted = false;
+    redisWatchdogTimer = setInterval(() => {
+      redis.ping()
+        .then(() => {
+          if (redisAlerted) {
+            redisAlerted = false;
+            void transport.postCheckpoint(`♻️ Redis reachable again.`);
+          }
+        })
+        .catch(() => {
+          if (!redisAlerted) {
+            redisAlerted = true;
+            void transport.postCheckpoint(
+              `🛑 Redis unreachable — agent state and queuing are degraded. Run \`redis-server --daemonize yes\`.`,
+            );
+          }
+        });
+    }, 60_000);
+
     await slackApp.start();
     console.log(`[wandr:orchestrator] Socket Mode active — routing commands for all agents`);
+
+    // ── Auto-purge: keep #wandr-ops under the configured threshold ──
+    const purgeThreshold = Number(process.env.WANDR_AUTO_PURGE_THRESHOLD ?? '50');
+    if (purgeThreshold > 0) {
+      autoPurgeTimer = setInterval(() => {
+        slackClient.conversations.history({ channel: config.slack.channelId, limit: purgeThreshold + 1 })
+          .then(async (resp) => {
+            const total = (resp.messages ?? []).length;
+            if (total <= purgeThreshold) return;
+            const overflow = total - purgeThreshold;
+            const keepNewest = purgeThreshold - 10; // drop to 10-below threshold so we don't purge every tick
+            const botUserId = await getBotUserId();
+            if (!botUserId) return;
+            // Fetch deeper to reach old ones; channel traffic is mostly bot.
+            let cursor: string | undefined;
+            let scanned = 0;
+            const toDelete: string[] = [];
+            const maxScan = 300;
+            while (scanned < maxScan) {
+              const page = await slackClient.conversations.history({
+                channel: config.slack.channelId,
+                limit: 100,
+                cursor,
+              });
+              const msgs = (page.messages ?? []) as Array<{ user?: string; ts?: string }>;
+              for (const m of msgs) {
+                scanned += 1;
+                if (scanned <= keepNewest) continue;
+                if (m.user === botUserId && m.ts) toDelete.push(m.ts);
+              }
+              cursor = page.response_metadata?.next_cursor;
+              if (!cursor) break;
+            }
+            let deleted = 0;
+            for (const ts of toDelete) {
+              if (deleted >= overflow + 20) break;
+              try {
+                await slackClient.chat.delete({ channel: config.slack.channelId, ts });
+                deleted += 1;
+                await new Promise((r) => setTimeout(r, 150));
+              } catch { /* best-effort */ }
+            }
+            if (deleted > 0) console.log(`[wandr:orchestrator] auto-purge deleted ${deleted} messages`);
+          })
+          .catch((err) => console.error(
+            `[wandr:orchestrator] auto-purge error: ${err instanceof Error ? err.message : String(err)}`,
+          ));
+      }, 2 * 60 * 1000);
+    }
   }
 
   // ── Start common services ──
@@ -405,6 +506,12 @@ async function mainAttach(agentId: string): Promise<void> {
 
   await api.start(config.api.port, config.api.host);
   await state.register();
+  await state.heartbeat();
+  heartbeatTimer = setInterval(() => {
+    void state.heartbeat().catch((err) => {
+      console.error(`[wandr:attach] heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, 30_000);
   queue.start();
   await tailer.start();
   bridge.start();
@@ -432,6 +539,10 @@ async function mainAttach(agentId: string): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`\n[wandr:attach] Received ${signal}, shutting down...`);
     if (operatorSilenceTimer) clearInterval(operatorSilenceTimer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (redisWatchdogTimer) clearInterval(redisWatchdogTimer);
+    if (autoPurgeTimer) clearInterval(autoPurgeTimer);
+    if (healthMonitor) healthMonitor.stop();
     checkpoint.stop();
     tailer.stop();
     bridge.stop();

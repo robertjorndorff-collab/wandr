@@ -129,6 +129,25 @@ export function isNoiseLine(raw: string): boolean {
   if (/Opus.*context/i.test(stripped)) return true;
   if (/~\/Desktop\//i.test(stripped)) return true; // cwd echo
 
+  // ── Shell/install noise ──
+  // npm/pnpm/yarn progress, warnings, and version notices flood the stream.
+  if (/^npm (warn|notice|http|info|verb|sill)\b/i.test(stripped)) return true;
+  if (/^(pnpm|yarn)\s+(warn|info|notice|verbose)\b/i.test(stripped)) return true;
+  if (/^\s*added\s+\d+\s+packages?\s+in\s+\d/i.test(stripped)) return true;
+  if (/^\s*\d+\s+packages?\s+are\s+looking\s+for\s+funding/i.test(stripped)) return true;
+  if (/^\s*found\s+\d+\s+vulnerabilities?/i.test(stripped)) return true;
+  // Progress bars / spinners: e.g. "[####----] 42%" or "⣾ Loading..."
+  if (/^\s*\[[#=\-\s]{5,}\]\s*\d+%?/.test(stripped)) return true;
+  if (/^[⠁⠃⠇⠋⠏⠟⠿⣿⣻⣽⣾⡾⢿]+/.test(stripped) && stripped.length <= 40) return true;
+  // Node stack-trace frames (single-line `    at Foo (bar:1:2)`)
+  if (/^\s+at\s+\S+\s*\(/.test(stripped) || /^\s+at\s+\/[\w./-]+:\d+:\d+$/.test(stripped)) return true;
+
+  // ── Explicit thinking / reasoning prose from the TUI ──
+  // These are human-readable lines the model emits mid-turn; the operator wants results, not reasoning.
+  if (/^(thinking|reasoning)\s*[:.…]/i.test(stripped)) return true;
+  if (/^\[thinking\]/i.test(stripped)) return true;
+  if (/^\[reasoning\]/i.test(stripped)) return true;
+
   // ── Character fragment heuristic ──
   // If the line is mostly non-letter chars or very short words, it's noise
   const letters = stripped.replace(/[^a-zA-Z]/g, '');

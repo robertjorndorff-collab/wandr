@@ -53,11 +53,14 @@ function tmuxHasSession(name: string): boolean {
 }
 
 export async function runUp(agentId: string, claudeArgs: string[]): Promise<void> {
-  // Extract --orchestrator flag (not a Claude arg)
+  // Auto-enable orchestrator for the 'wandr' agent (the command router)
   const orchestratorIdx = claudeArgs.indexOf('--orchestrator');
-  const isOrchestrator = orchestratorIdx !== -1;
+  let isOrchestrator = orchestratorIdx !== -1;
   if (isOrchestrator) {
     claudeArgs.splice(orchestratorIdx, 1);
+  }
+  if (agentId === 'wandr' && !isOrchestrator) {
+    isOrchestrator = true;
   }
 
   console.log(`[wandr] Bringing up agent: ${agentId}${isOrchestrator ? ' (orchestrator)' : ''}`);
@@ -180,6 +183,20 @@ export async function runUp(agentId: string, claudeArgs: string[]): Promise<void
     console.error(`[wandr]   Sidecar log tail will be empty.`);
   }
 
+  // ── 6. Startup health gate ────────────────────────────────────────
+  // Confirm that (a) the sidecar's Manager API is responding and (b) a
+  // Claude-like process is actually alive inside the tmux pane. If either
+  // fails, tear down and exit non-zero so the caller sees a real failure.
+  const healthErrors = await runStartupHealthGate(agentId, agentPort, sidecar.pid ?? -1);
+  if (healthErrors.length > 0) {
+    for (const e of healthErrors) console.error(`[wandr] \u2717 Health gate: ${e}`);
+    console.error(`[wandr] \u2717 Startup failed — see ${sidecarLog}`);
+    try { tmux(['kill-session', '-t', agentId]); } catch { /* ignore */ }
+    try { process.kill(sidecar.pid!, 'SIGTERM'); } catch { /* ignore */ }
+    process.exit(1);
+  }
+  console.log(`[wandr] \u2713 Health gate: sidecar API + tmux pane process confirmed alive`);
+
   console.log('');
   console.log(`[wandr] \u25B6 Agent "${agentId}" is up.`);
   console.log(`[wandr]   Attach:        tmux attach -t ${agentId}`);
@@ -225,6 +242,71 @@ export async function runDown(agentId: string): Promise<void> {
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+async function runStartupHealthGate(agentId: string, port: number, sidecarPid: number): Promise<string[]> {
+  const errors: string[] = [];
+
+  // Check 1: tmux session exists
+  if (!tmuxHasSession(agentId)) {
+    errors.push(`tmux session "${agentId}" missing`);
+  }
+
+  // Check 2: Manager API /health responds
+  const apiOk = await pingManagerHealth(port, 5000);
+  if (!apiOk) errors.push(`Manager API at 127.0.0.1:${port}/health did not respond`);
+
+  // Check 3: Sidecar process still alive
+  if (sidecarPid > 0) {
+    try {
+      process.kill(sidecarPid, 0);
+    } catch {
+      errors.push(`sidecar pid ${sidecarPid} is not running`);
+    }
+  }
+
+  // Check 4: tmux pane has a child process (Claude Code actually spawned)
+  if (tmuxHasSession(agentId)) {
+    const panes = spawnSync('tmux', ['list-panes', '-t', agentId, '-F', '#{pane_pid}'], { encoding: 'utf-8' });
+    const panePid = Number((panes.stdout ?? '').trim().split('\n')[0]);
+    if (!Number.isFinite(panePid) || panePid <= 0) {
+      errors.push('tmux pane has no PID');
+    } else {
+      // pgrep -P returns child PIDs. A freshly spawned claude should be a child of the shell/env wrapper.
+      const children = spawnSync('pgrep', ['-P', String(panePid)], { encoding: 'utf-8' });
+      const hasChild = (children.stdout ?? '').trim().length > 0 || children.status === 0;
+      // pgrep returns 1 when no match — treat that as failure. Some envs have `claude` as the pane PID directly; that's fine.
+      if (!hasChild) {
+        // Fallback: if the pane PID's command itself looks like claude, accept it.
+        const cmd = spawnSync('ps', ['-o', 'comm=', '-p', String(panePid)], { encoding: 'utf-8' });
+        const comm = (cmd.stdout ?? '').trim().toLowerCase();
+        if (!comm.includes('claude') && !comm.includes('node') && !comm.includes('env')) {
+          errors.push(`tmux pane pid ${panePid} has no Claude-like process (comm=${comm || 'unknown'})`);
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
+async function pingManagerHealth(port: number, timeoutMs: number): Promise<boolean> {
+  const http = await import('node:http');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ok = await new Promise<boolean>((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/health', timeout: 1000 }, (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+      req.end();
+    });
+    if (ok) return true;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
 }
 
 async function waitForReady(logPath: string, timeoutMs: number): Promise<void> {
